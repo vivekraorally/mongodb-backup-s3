@@ -165,3 +165,5 @@ ln -s /backup.sh /usr/bin/backup
 ln -s /listbackups.sh /usr/bin/listbackups
 
 touch /mongo_backup.log
+
+read
