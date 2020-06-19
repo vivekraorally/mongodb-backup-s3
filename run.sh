@@ -1,5 +1,94 @@
 #!/bin/bash
 
+echo "=> Creating backup script"
+rm -f /backup.sh
+cat <<EOF >> /backup.sh
+#!/bin/bash
+# 1 - MONGODB_HOST
+# 1 - MONGODB_PORT
+# 1 - MONGODB_USER
+# 1 - MONGODB_PASS
+# 1 - BUCKET
+# 1 - BACKUP_FOLDER
+# 1 - MONGODB_DB
+# 1 - MONGODB_COLLECTION
+# 1 - EXTRA_OPTS
+
+OPTIND=1         # Reset in case getopts has been used previously in the shell.
+while getopts "h:u:p:b:f:d:c:e" opt; do
+    case "$opt" in
+    # required args
+    h)  MONGODB_HOST=$OPTARG
+		;;
+    u)  MONGODB_USER=$OPTARG
+        ;;
+    p)  MONGODB_PASS=$OPTARG
+        ;;
+    b)  BUCKET=$OPTARG
+        ;;
+    f)  BACKUP_FOLDER=$OPTARG
+        ;;
+    d)  MONGODB_DB=$OPTARG
+        ;;
+    c)  MONGODB_COLLECTIONS=$OPTARG
+        ;;
+    e)  EXTRA_OPTS=$OPTARG
+        ;;
+    *)
+        echo "Unrecognized option: ${opt}" >&2
+        exit 1
+        ;;
+    esac
+done
+
+if [ -z "$MONGODB_HOST" ];then
+    #helptext
+    #tildes
+    echo "Backup failed - host is missing"
+    exit 1
+fi
+
+if [ -z "$MONGODB_USER" ];then
+    #helptext
+    #tildes
+    echo "Backup failed - user is missing"
+    exit 1
+fi
+
+if [ -z "$MONGODB_PASS" ];then
+    #helptext
+    #tildes
+    echo "Backup failed - password is missing"
+    exit 1
+fi
+
+if [ -z "$BUCKET" ];then
+    #helptext
+    #tildes
+    echo "Backup failed - s3 bucket is missing"
+    exit 1
+fi
+
+if [ -z "$BACKUP_FOLDER" ];then
+    #helptext
+    #tildes
+    echo "Backup failed - s3 backup folder is missing"
+    exit 1
+fi
+
+if [ -z "$MONGODB_DB" ];then
+    #helptext
+    #tildes
+    echo "Backup failed - db name is missing"
+    exit 1
+fi
+
+if [ -z "$EXTRA_OPTS" ];then
+    #helptext
+    #tildes
+    echo "No extra options specified"
+fi
+
 MONGODB_HOST=${MONGODB_PORT_27017_TCP_ADDR:-${MONGODB_HOST}}
 MONGODB_HOST=${MONGODB_PORT_1_27017_TCP_ADDR:-${MONGODB_HOST}}
 MONGODB_PORT=${MONGODB_PORT_27017_TCP_PORT:-${MONGODB_PORT}}
@@ -15,18 +104,22 @@ S3PATH="s3://$BUCKET/$BACKUP_FOLDER"
 [[ ( -n "${MONGODB_PASS}" ) ]] && PASS_STR=" --password '${MONGODB_PASS}'"
 [[ ( -n "${MONGODB_DB}" ) ]] && DB_STR=" --db ${MONGODB_DB}"
 
-# Export AWS Credentials into env file for cron job
-printenv | sed 's/^\([a-zA-Z0-9_]*\)=\(.*\)$/export \1="\2"/g' | grep -E "^export AWS" > /root/project_env.sh
-
-echo "=> Creating backup script"
-rm -f /backup.sh
-cat <<EOF >> /backup.sh
-#!/bin/bash
 TIMESTAMP=\`/bin/date +"%Y%m%dT%H%M%S"\`
 BACKUP_NAME=\${TIMESTAMP}.dump.gz
 S3BACKUP=${S3PATH}\${BACKUP_NAME}
 S3LATEST=${S3PATH}latest.dump.gz
 echo "=> Backup started"
+if [ -z "$MONGODB_COLLECTIONS" ];then
+    #helptext
+    #tildes
+    echo "Collection not specified...performing full db backup (Unless you excluded collections in EXTRA_OPTS)"
+else
+    for COLLECTION in $(echo $MONGODB_COLLECTIONS | sed "s/,/ /g")
+    do
+        BACKUP_NAME="$COLLECTION_$BACKUP_NAME"
+        mongodump --host ${MONGODB_HOST} --port ${MONGODB_PORT} ${USER_STR}${PASS_STR}${DB_STR} --collection ${COLLECTION} --archive=\${BACKUP_NAME} --gzip ${EXTRA_OPTS}
+    done
+fi
 if mongodump --host ${MONGODB_HOST} --port ${MONGODB_PORT} ${USER_STR}${PASS_STR}${DB_STR} --archive=\${BACKUP_NAME} --gzip ${EXTRA_OPTS} && aws s3 cp \${BACKUP_NAME} \${S3BACKUP} && aws s3 cp \${S3BACKUP} \${S3LATEST} && rm \${BACKUP_NAME} ;then
     echo "   > Backup succeeded"
 else
@@ -72,20 +165,3 @@ ln -s /backup.sh /usr/bin/backup
 ln -s /listbackups.sh /usr/bin/listbackups
 
 touch /mongo_backup.log
-
-if [ -n "${INIT_BACKUP}" ]; then
-    echo "=> Create a backup on the startup"
-    /backup.sh
-fi
-
-if [ -n "${INIT_RESTORE}" ]; then
-    echo "=> Restore store from lastest backup on startup"
-    /restore.sh
-fi
-
-if [ -z "${DISABLE_CRON}" ]; then
-    echo "${CRON_TIME} . /root/project_env.sh; /backup.sh >> /mongo_backup.log 2>&1" > /crontab.conf
-    crontab  /crontab.conf
-    echo "=> Running cron job"
-    cron && tail -f /mongo_backup.log
-fi
