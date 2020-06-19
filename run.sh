@@ -166,4 +166,7 @@ ln -s /listbackups.sh /usr/bin/listbackups
 
 touch /mongo_backup.log
 
-read
+while :
+do
+	sleep 10
+done
